@@ -11,7 +11,6 @@ from .database import SessionLocal, engine
 
 models.Base.metadata.create_all(bind=engine)
 
-
 SECRET_KEY = f"{'_not_a_secret_':x^64}"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
@@ -20,6 +19,10 @@ SUB_RE = re.compile(r"^user:id:(\d*)$")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 app = FastAPI()
+
+RESPONSE_404 = {"model": schemas.ResponseMessage, "description": "Item not found"}
+RESPONSE_403 = {"model": schemas.ResponseMessage, "description": "No permission"}
+RESPONSE_401 = {"model": schemas.ResponseMessage, "description": "Not authenticated"}
 
 
 def get_db():
@@ -75,7 +78,7 @@ async def get_current_active_user(current_user: schemas.User = Depends(get_curre
     return current_user
 
 
-@app.post("/token", response_model=schemas.Token)
+@app.post("/token", response_model=schemas.Token, responses={401: RESPONSE_401})
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
@@ -108,12 +111,12 @@ def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return users
 
 
-@app.get("/users/me", response_model=schemas.User)
+@app.get("/users/me", response_model=schemas.User, responses={401: RESPONSE_401})
 def read_user_self(user: models.User = Depends(get_current_active_user)):
     return user
 
 
-@app.get("/users/{user_id}", response_model=schemas.User)
+@app.get("/users/{user_id}", response_model=schemas.User, responses={404: RESPONSE_404})
 def read_user(user_id: int, db: Session = Depends(get_db)):
     db_user = crud.get_user(db, user_id=user_id)
     if db_user is None:
@@ -121,9 +124,12 @@ def read_user(user_id: int, db: Session = Depends(get_db)):
     return db_user
 
 
-@app.get("/users/{user_id}/posts", response_model=list[schemas.Post])
+@app.get("/users/{user_id}/posts", response_model=list[schemas.Post], responses={404: RESPONSE_404})
 def read_user_posts(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_posts(db=db, skip=skip, limit=limit, user_id=user_id)
+    db_posts = crud.get_posts(db=db, skip=skip, limit=limit, user_id=user_id)
+    if db_posts is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return db_posts
 
 
 @app.get("/posts/", response_model=list[schemas.Post])
@@ -137,31 +143,34 @@ def create_post(post: schemas.PostCreate, user: models.User = Depends(get_curren
     return crud.create_user_post(db=db, post=post, user_id=user.id)
 
 
-@app.get("/posts/{post_id}", response_model=schemas.Post)
+@app.get("/posts/{post_id}", response_model=schemas.Post, responses={404: RESPONSE_404})
 def get_post(post_id: int, db: Session = Depends(get_db)):
-    return crud.get_post(db=db, post_id=post_id)
+    db_post = crud.get_post(db=db, post_id=post_id)
+    if db_post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return db_post
 
 
-@app.put("/posts/{post_id}", response_model=schemas.Post)
+@app.put("/posts/{post_id}", response_model=schemas.Post, responses={404: RESPONSE_404, 403: RESPONSE_403})
 def update_post(post_id: int, post: schemas.PostBase, db: Session = Depends(get_db),
                 user: models.User = Depends(get_current_active_user)):
     try:
-        edited_post = crud.edit_user_post(db=db, post_id=post_id, post=post, user_id=user.id)
+        edited_db_post = crud.edit_user_post(db=db, post_id=post_id, post=post, user_id=user.id)
     except crud.NoPermission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Action not allowed"
         )
     else:
-        if not edited_post:
+        if not edited_db_post:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="No such post"
+                detail="Post not found"
             )
-        return edited_post
+        return edited_db_post
 
 
-@app.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT, responses={404: RESPONSE_404, 403: RESPONSE_403})
 def delete_post(post_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_active_user)):
     try:
         result = crud.delete_user_post(db=db, post_id=post_id, user_id=user.id)
@@ -174,59 +183,99 @@ def delete_post(post_id: int, db: Session = Depends(get_db), user: models.User =
         if not result:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="No such post"
+                detail="Post not found"
             )
 
 
 # Reactions
-@app.put("/posts/{post_id}/clear_like", response_model=schemas.Post)
-def clear_like_post(post_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_active_user)):
-    return crud.delete_reaction_user_post(db=db, post_id=post_id, user_id=user.id)
+@app.delete("/posts/{post_id}/likes/", response_model=schemas.Post, responses={404: {"model": str}})
+@app.delete("/posts/{post_id}/dislikes/", response_model=schemas.Post, responses={404: RESPONSE_404})
+@app.delete("/posts/{post_id}/clear_reaction/", response_model=schemas.Post, responses={404: RESPONSE_404})
+def clear_reaction_post(post_id: int, db: Session = Depends(get_db),
+                        user: models.User = Depends(get_current_active_user)):
+    """
+    Clears the reaction (like, dislike) off a Post, provided Post id.
+    Alternative paths provided for convenience; be wary that it will remove both like or dislike!
+    """
+    db_post = crud.delete_reaction_user_post(db=db, post_id=post_id, user_id=user.id)
+    if db_post is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return db_post
 
 
 # Like
-@app.get("/posts/{post_id}/likes/", response_model=list[schemas.User])
+@app.get("/posts/{post_id}/likes/", response_model=list[schemas.User], responses={404: RESPONSE_404})
 def get_post_likes(post_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_users_reactions_by_post(db=db, post_id=post_id, skip=skip, limit=limit, dislike=False)
+    db_users = crud.get_users_reactions_by_post(db=db, post_id=post_id, skip=skip, limit=limit, dislike=False)
+    if db_users is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return db_users
 
 
-@app.get("/users/{user_id}/likes/", response_model=list[schemas.Post])
+@app.get("/users/me/likes/", response_model=list[schemas.Post])
+def get_user_self_likes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db),
+                        user: models.User = Depends(get_current_active_user)):
+    db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user.id, skip=skip, limit=limit, dislike=False)
+    return db_posts
+
+
+@app.get("/users/{user_id}/likes/", response_model=list[schemas.Post], responses={404: RESPONSE_404})
 def get_user_likes(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_posts_reactions_by_user(db=db, user_id=user_id, skip=skip, limit=limit, dislike=False)
+    db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user_id, skip=skip, limit=limit, dislike=False)
+    if db_posts is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return db_posts
 
 
-@app.put("/posts/{post_id}/like", response_model=schemas.Post)
+@app.put("/posts/{post_id}/likes/", response_model=schemas.Post, responses={404: RESPONSE_404, 403: RESPONSE_403})
 def like_post(post_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_active_user)):
     try:
-        reaction = crud.react_user_post(db=db, post_id=post_id, user_id=user.id, dislike=False)
+        db_post = crud.react_user_post(db=db, post_id=post_id, user_id=user.id, dislike=False)
+        if db_post is None:
+            raise HTTPException(status_code=404, detail="Post not found")
     except crud.NoPermission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot like own post"
         )
     else:
-        return reaction.post
+        return db_post
 
 
 # Dislike
-@app.get("/posts/{post_id}/dislikes/", response_model=list[schemas.User])
+@app.get("/posts/{post_id}/dislikes/", response_model=list[schemas.User], responses={404: RESPONSE_404})
 def get_post_dislikes(post_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_users_reactions_by_post(db=db, post_id=post_id, skip=skip, limit=limit, dislike=True)
+    db_users = crud.get_users_reactions_by_post(db=db, post_id=post_id, skip=skip, limit=limit, dislike=True)
+    if db_users is None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return db_users
 
 
-@app.get("/users/{user_id}/dislikes/", response_model=list[schemas.Post])
+@app.get("/users/me/dislikes/", response_model=list[schemas.Post])
+def get_user_self_dislikes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db),
+                           user: models.User = Depends(get_current_active_user)):
+    db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user.id, skip=skip, limit=limit, dislike=True)
+    return db_posts
+
+
+@app.get("/users/{user_id}/dislikes/", response_model=list[schemas.Post], responses={404: RESPONSE_404})
 def get_user_dislikes(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_posts_reactions_by_user(db=db, user_id=user_id, skip=skip, limit=limit, dislike=True)
+    db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user_id, skip=skip, limit=limit, dislike=True)
+    if db_posts is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return db_posts
 
 
-@app.put("/posts/{post_id}/dislike", response_model=schemas.Post)
+@app.put("/posts/{post_id}/dislikes/", response_model=schemas.Post, responses={404: RESPONSE_404, 403: RESPONSE_403})
 def dislike_post(post_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_active_user)):
     try:
-        reaction = crud.react_user_post(db=db, post_id=post_id, user_id=user.id, dislike=True)
+        db_post = crud.react_user_post(db=db, post_id=post_id, user_id=user.id, dislike=True)
+        if db_post is None:
+            raise HTTPException(status_code=404, detail="Post not found")
     except crud.NoPermission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot dislike own post"
         )
     else:
-        return reaction.post
+        return db_post

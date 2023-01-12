@@ -57,3 +57,7 @@ class ReactionBase(BaseModel):
 
 class Reaction(ReactionBase):
     pass
+
+
+class ResponseMessage(BaseModel):
+    detail: str
