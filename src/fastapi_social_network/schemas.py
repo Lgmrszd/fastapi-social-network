@@ -25,6 +25,8 @@ class Post(PostBase):
     id: int
     timestamp: datetime
     owner_id: int
+    likes: int
+    dislikes: int
 
     class Config:
         orm_mode = True

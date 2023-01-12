@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from . import models, schemas, security
 
@@ -40,16 +40,12 @@ def create_user(db: Session, user: schemas.UserCreate):
 
 def get_posts(db: Session, skip: int = 0, limit: int = 100, user_id: int | None = None):
     if user_id is not None:
-        return db.query(models.Post).filter(models.Post.owner_id == user_id).offset(skip).limit(limit).all()
-    return db.query(models.Post).offset(skip).limit(limit).all()
+        return db.query(models.Post).options(joinedload(models.Post.reactions)).filter(models.Post.owner_id == user_id).offset(skip).limit(limit).all()
+    return db.query(models.Post).options(joinedload(models.Post.reactions)).offset(skip).limit(limit).all()
 
 
 def get_post(db: Session, post_id: int):
-    return db.query(models.Post).filter(models.Post.id == post_id).first()
-
-
-def get_user_posts(db: Session, user_id: int, skip: int = 0, limit: int = 100):
-    return db.query(models.Post).filter(models.Post.owner_id == user_id).offset(skip).limit(limit).all()
+    return db.query(models.Post).options(joinedload(models.Post.reactions)).filter(models.Post.id == post_id).first()
 
 
 def create_user_post(db: Session, post: schemas.PostCreate, user_id: int):

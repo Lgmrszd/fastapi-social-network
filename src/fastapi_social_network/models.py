@@ -1,5 +1,6 @@
-from sqlalchemy import Column, ForeignKey, Integer, String, DateTime, Boolean
+from sqlalchemy import Column, ForeignKey, Integer, String, DateTime, Boolean, select, func
 from sqlalchemy.orm import relationship
+from sqlalchemy.ext.hybrid import hybrid_property
 
 from .database import Base
 
@@ -26,6 +27,28 @@ class Post(Base):
 
     owner = relationship("User", back_populates="posts")
     reactions = relationship("PostReaction", back_populates="post", cascade="all, delete, delete-orphan")
+
+    @hybrid_property
+    def likes(self):
+        return sum(not r.dislike for r in self.reactions)
+
+    @likes.expression
+    def likes(cls):
+        return select(func.count(1)
+                      .filter(PostReaction.dislike == False))\
+            .filter(PostReaction.post_id == cls.id)\
+            .label("likes")
+
+    @hybrid_property
+    def dislikes(self):
+        return sum(r.dislike for r in self.reactions)
+
+    @dislikes.expression
+    def dislikes(cls):
+        return select(func.count(1)
+                      .filter(PostReaction.dislike == True))\
+            .filter(PostReaction.post_id == cls.id)\
+            .label("dislikes")
 
 
 class PostReaction(Base):
