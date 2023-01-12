@@ -1,5 +1,5 @@
-from src.fastapi_social_network.models import User, Post
-from src.fastapi_social_network.security import hash_password
+from fastapi_social_network import User, Post
+from fastapi_social_network.security import hash_password
 from .db import DB_HOLDER
 
 

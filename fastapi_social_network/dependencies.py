@@ -7,7 +7,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from . import crud, models, schemas, security
-from .database import SessionLocal, engine
+from .database import SessionLocal
 
 SECRET_KEY = f"{'_not_a_secret_':x^64}"
 ALGORITHM = "HS256"

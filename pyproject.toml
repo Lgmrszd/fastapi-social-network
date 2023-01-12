@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastapi-social-network"
+description = "Example of social network API made with FastAPI"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["FastAPI"]
+license = {text = "GNU LGPL"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "fastapi >= 0.89.0",
+    "sqlalchemy >= 1.4.46",
+    "python-jose[cryptography] >= 3.3.0"
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+
+#[project.scripts]
+#sigame-tools = "sigame_tools.cli:main"
+
+[tool.setuptools]
+packages=["fastapi_social_network"]
+
+[tool.setuptools.dynamic]
+version = {attr = "fastapi_social_network.VERSION"}

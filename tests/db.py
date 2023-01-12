@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from src.fastapi_social_network.database import Base
+from fastapi_social_network.database import Base
 
 
 class DbHolder:
