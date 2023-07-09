@@ -9,6 +9,7 @@ from .. import crud, models, schemas
 from ..config import settings
 from ..database import engine
 from ..dependencies import authenticate_user, get_current_active_user, create_access_token, get_db
+from .. import responses
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -18,20 +19,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 SUB_RE = re.compile(r"^user:id:(\d*)$")
 
-RESPONSE_401 = {"model": schemas.ResponseMessage, "description": "Not authenticated"}
-RESPONSE_403 = {"model": schemas.ResponseMessage, "description": "No permission"}
-RESPONSE_404 = {"model": schemas.ResponseMessage, "description": "Item not found"}
 
-router = APIRouter(
-    responses={
-        401: RESPONSE_401,
-        403: RESPONSE_403,
-        404: RESPONSE_404
-    }
-)
+router = APIRouter()
 
 
-@router.post("/token", response_model=schemas.Token, responses={401: RESPONSE_401})
+@router.post("/token", response_model=schemas.Token, responses=responses.RESPONSES_401)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
@@ -47,7 +39,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@router.post("/users/", response_model=schemas.User)
+@router.post("/users", response_model=schemas.User, responses=responses.RESPONSES_400)
 def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     db_user = crud.get_user_by_email(db, email=user.email)
     if db_user:
@@ -58,18 +50,18 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
     return crud.create_user(db=db, user=user)
 
 
-@router.get("/users/", response_model=list[schemas.User])
+@router.get("/users", response_model=list[schemas.User])
 def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     users = crud.get_users(db, skip=skip, limit=limit)
     return users
 
 
-@router.get("/users/me", response_model=schemas.User, responses={401: RESPONSE_401})
+@router.get("/users/me", response_model=schemas.User, responses=responses.RESPONSES_401)
 def read_user_self(user: models.User = Depends(get_current_active_user)):
     return user
 
 
-@router.get("/users/{user_id}", response_model=schemas.User, responses={404: RESPONSE_404})
+@router.get("/users/{user_id}", response_model=schemas.User, responses=responses.RESPONSES_404)
 def read_user(user_id: int, db: Session = Depends(get_db)):
     db_user = crud.get_user(db, user_id=user_id)
     if db_user is None:
@@ -77,7 +69,7 @@ def read_user(user_id: int, db: Session = Depends(get_db)):
     return db_user
 
 
-@router.get("/users/{user_id}/posts", response_model=list[schemas.Post], responses={404: RESPONSE_404})
+@router.get("/users/{user_id}/posts", response_model=list[schemas.Post], responses=responses.RESPONSES_404)
 def read_user_posts(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     db_posts = crud.get_posts(db=db, skip=skip, limit=limit, user_id=user_id)
     if db_posts is None:
@@ -85,18 +77,18 @@ def read_user_posts(user_id: int, skip: int = 0, limit: int = 100, db: Session =
     return db_posts
 
 
-@router.get("/posts/", response_model=list[schemas.Post])
+@router.get("/posts", response_model=list[schemas.Post])
 def read_posts(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return crud.get_posts(db=db, skip=skip, limit=limit)
 
 
-@router.post("/posts/", response_model=schemas.Post)
+@router.post("/posts", response_model=schemas.Post, responses=responses.RESPONSES_401)
 def create_post(post: schemas.PostCreate, user: models.User = Depends(get_current_active_user),
                 db: Session = Depends(get_db)):
     return crud.create_user_post(db=db, post=post, user_id=user.id)
 
 
-@router.get("/posts/{post_id}", response_model=schemas.Post, responses={404: RESPONSE_404})
+@router.get("/posts/{post_id}", response_model=schemas.Post, responses=responses.RESPONSES_404)
 def get_post(post_id: int, db: Session = Depends(get_db)):
     db_post = crud.get_post(db=db, post_id=post_id)
     if db_post is None:
@@ -104,7 +96,7 @@ def get_post(post_id: int, db: Session = Depends(get_db)):
     return db_post
 
 
-@router.put("/posts/{post_id}", response_model=schemas.Post, responses={404: RESPONSE_404, 403: RESPONSE_403})
+@router.put("/posts/{post_id}", response_model=schemas.Post, responses=responses.RESPONSES_401_403_404)
 def update_post(post_id: int, post: schemas.PostBase, db: Session = Depends(get_db),
                 user: models.User = Depends(get_current_active_user)):
     try:
@@ -123,7 +115,7 @@ def update_post(post_id: int, post: schemas.PostBase, db: Session = Depends(get_
         return edited_db_post
 
 
-@router.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT, responses={404: RESPONSE_404, 403: RESPONSE_403})
+@router.delete("/posts/{post_id}", status_code=status.HTTP_204_NO_CONTENT, responses=responses.RESPONSES_401_403_404)
 def delete_post(post_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_active_user)):
     try:
         result = crud.delete_user_post(db=db, post_id=post_id, user_id=user.id)
@@ -141,9 +133,9 @@ def delete_post(post_id: int, db: Session = Depends(get_db), user: models.User =
 
 
 # Reactions
-@router.delete("/posts/{post_id}/likes/", response_model=schemas.Post, responses={404: {"model": str}})
-@router.delete("/posts/{post_id}/dislikes/", response_model=schemas.Post, responses={404: RESPONSE_404})
-@router.delete("/posts/{post_id}/clear_reaction/", response_model=schemas.Post, responses={404: RESPONSE_404})
+@router.delete("/posts/{post_id}/likes", response_model=schemas.Post, responses=responses.RESPONSES_401_404)
+@router.delete("/posts/{post_id}/dislikes", response_model=schemas.Post, responses=responses.RESPONSES_401_404)
+@router.delete("/posts/{post_id}/clear_reaction", response_model=schemas.Post, responses=responses.RESPONSES_401_404)
 def clear_reaction_post(post_id: int, db: Session = Depends(get_db),
                         user: models.User = Depends(get_current_active_user)):
     """
@@ -157,7 +149,7 @@ def clear_reaction_post(post_id: int, db: Session = Depends(get_db),
 
 
 # Like
-@router.get("/posts/{post_id}/likes/", response_model=list[schemas.User], responses={404: RESPONSE_404})
+@router.get("/posts/{post_id}/likes", response_model=list[schemas.User], responses=responses.RESPONSES_404)
 def get_post_likes(post_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     db_users = crud.get_users_reactions_by_post(db=db, post_id=post_id, skip=skip, limit=limit, dislike=False)
     if db_users is None:
@@ -165,14 +157,14 @@ def get_post_likes(post_id: int, skip: int = 0, limit: int = 100, db: Session = 
     return db_users
 
 
-@router.get("/users/me/likes/", response_model=list[schemas.Post])
+@router.get("/users/me/likes", response_model=list[schemas.Post], responses=responses.RESPONSES_401)
 def get_user_self_likes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db),
                         user: models.User = Depends(get_current_active_user)):
     db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user.id, skip=skip, limit=limit, dislike=False)
     return db_posts
 
 
-@router.get("/users/{user_id}/likes/", response_model=list[schemas.Post], responses={404: RESPONSE_404})
+@router.get("/users/{user_id}/likes", response_model=list[schemas.Post], responses=responses.RESPONSES_404)
 def get_user_likes(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user_id, skip=skip, limit=limit, dislike=False)
     if db_posts is None:
@@ -180,7 +172,7 @@ def get_user_likes(user_id: int, skip: int = 0, limit: int = 100, db: Session = 
     return db_posts
 
 
-@router.put("/posts/{post_id}/likes/", response_model=schemas.Post, responses={404: RESPONSE_404, 403: RESPONSE_403})
+@router.put("/posts/{post_id}/likes", response_model=schemas.Post, responses=responses.RESPONSES_401_403_404)
 def like_post(post_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_active_user)):
     try:
         db_post = crud.react_user_post(db=db, post_id=post_id, user_id=user.id, dislike=False)
@@ -196,7 +188,7 @@ def like_post(post_id: int, db: Session = Depends(get_db), user: models.User = D
 
 
 # Dislike
-@router.get("/posts/{post_id}/dislikes/", response_model=list[schemas.User], responses={404: RESPONSE_404})
+@router.get("/posts/{post_id}/dislikes", response_model=list[schemas.User], responses=responses.RESPONSES_404)
 def get_post_dislikes(post_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     db_users = crud.get_users_reactions_by_post(db=db, post_id=post_id, skip=skip, limit=limit, dislike=True)
     if db_users is None:
@@ -204,14 +196,14 @@ def get_post_dislikes(post_id: int, skip: int = 0, limit: int = 100, db: Session
     return db_users
 
 
-@router.get("/users/me/dislikes/", response_model=list[schemas.Post])
+@router.get("/users/me/dislikes", response_model=list[schemas.Post], responses=responses.RESPONSES_401)
 def get_user_self_dislikes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db),
                            user: models.User = Depends(get_current_active_user)):
     db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user.id, skip=skip, limit=limit, dislike=True)
     return db_posts
 
 
-@router.get("/users/{user_id}/dislikes/", response_model=list[schemas.Post], responses={404: RESPONSE_404})
+@router.get("/users/{user_id}/dislikes", response_model=list[schemas.Post], responses=responses.RESPONSES_404)
 def get_user_dislikes(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     db_posts = crud.get_posts_reactions_by_user(db=db, user_id=user_id, skip=skip, limit=limit, dislike=True)
     if db_posts is None:
@@ -219,7 +211,7 @@ def get_user_dislikes(user_id: int, skip: int = 0, limit: int = 100, db: Session
     return db_posts
 
 
-@router.put("/posts/{post_id}/dislikes/", response_model=schemas.Post, responses={404: RESPONSE_404, 403: RESPONSE_403})
+@router.put("/posts/{post_id}/dislikes", response_model=schemas.Post, responses=responses.RESPONSES_401_403_404)
 def dislike_post(post_id: int, db: Session = Depends(get_db), user: models.User = Depends(get_current_active_user)):
     try:
         db_post = crud.react_user_post(db=db, post_id=post_id, user_id=user.id, dislike=True)
